@@ -101,10 +101,11 @@ class OdomGPSEstimator:
 
 		return dx, dy
 
-		
+	
+
 
 	def gpsCoordinateChange(self):
-		#if getting GPS measurements
+	    #updates gps measurements at main loop rate
 		if self.GPS_long != None:
 
 			self.curr_long = self.GPS_long
@@ -120,6 +121,7 @@ class OdomGPSEstimator:
 
 
 
+
 	def odomCallback(self, odom_data):
 		self.odom_x = odom_data.pose.pose.position.x
 		self.odom_y = odom_data.pose.pose.position.y
@@ -131,46 +133,63 @@ class OdomGPSEstimator:
 
 
 
+
 	def calibrateTheta(self):
-		#finds angle that odom frame is rotated from the NS-EW (world) frame
-		#should calibrate on relatively flat ground without much in the way
+		#performs odom to NS-EW (world) frame calibration by driving the robot forward and back, 
+		#measuring angle from the GPS coordinate change
 
-		#needs to use GPS callback data directly
-
-		data_rate = 1
-		calibration_speed = 0.5
+		data_period= 1 #[s]
+		calibration_speed = 0.5 #[m/s]
 		calibration_distance = 5 #[m]
 
-		cal_rate = rospy.Rate(data_rate)
-
-		cal_data = np.zeros([2, calibration_distance/calibration_speed * data_rate])
+		cal_data = []
 		cal_cmd_vel = Twist()
 
 		print 'beginning calibration data collection'
 
-		for column in xrange(cal_data.shape[1]):
-			cal_cmd_vel.linear.x = calibration_speed;
-			vel_pub.publish(cal_cmd_vel)
-			cal_rate.sleep()
+		cal_curr_time = rospy.Time.now().to_sec()
+		cal_prev_time = cal_curr_time
+		cal_end_time = rospy.Time.now().to_sec() + calibration_distance/calibration_speed
 
-			cal_data[1, column] = self.GPS_long
-			cal_data[2, column] = self.GPS_lat
+		while cal_curr_time <= cal_end_time:
+			cal_cmd_vel.linear.x = calibration_speed
+			self.vel_pub.publish(cal_cmd_vel)
+
+			if cal_curr_time - cal_prev_time >= data_period:
+
+				cal_prev_time = cal_curr_time
+				new_data = [self.GPS_long, self.GPS_lat]
+				cal_data.append(new_data)
+
+			cal_curr_time = rospy.Time.now().to_sec()
+
 
 		cal_cmd_vel.linear.x = 0
-		vel_pub.publish(cal_cmd_vel)
+		self.vel_pub.publish(cal_cmd_vel)
 		print 'finished calibration data collection, determining odom to world frame orientation'
-		print cal_data
+
 		sum = 0
-		for column in xrange(cal_data.shape[1]):
-			dx, dy = self.haversineFormula(cal_data[1,i], cal_data[2,i], self.init_long, self.init_lat)
+		for data_pt in xrange(len(cal_data)):
+			dx, dy = self.haversineFormula(cal_data[data_pt][0], cal_data[data_pt][1], self.init_long, self.init_lat)
 			sum += np.arctan2(dy,dx)
 
-		self.theta_odom_world = sum / cal_data.shape[1]
-		print 'odom frame is ', theta * np.pi / 180, ' degrees from the NS-EW (world) frame'
 
-		#have it drive back?
+		self.theta_odom_world = sum / len(cal_data)
+		print 'odom frame is ', self.theta_odom_world / np.pi * 180, ' degrees from the NS-EW (world) frame'
+		rospy.sleep(3)
 
 
+		print 'driving back'
+		cal_curr_time = rospy.Time.now().to_sec()
+		cal_end_time = rospy.Time.now().to_sec() + calibration_distance/calibration_speed
+
+		while cal_curr_time <= cal_end_time:
+			cal_cmd_vel.linear.x = -calibration_speed
+			self.vel_pub.publish(cal_cmd_vel)
+			cal_curr_time = rospy.Time.now().to_sec()
+
+		cal_cmd_vel.linear.x = 0
+		self.vel_pub.publish(cal_cmd_vel)
 
 		#result initialize attributes for GPS tracking
 		self.prev_long = self.GPS_long
@@ -180,9 +199,9 @@ class OdomGPSEstimator:
 
 
 
+
 	def printEstimate(self):
 		
-
 		print'longitude: ', self.curr_long
 		print'gps x: ', self.gps_x, '\n'
 		print'latitude: ', self.curr_lat
@@ -195,14 +214,12 @@ class OdomGPSEstimator:
 
 
 
-
-
 if __name__ == '__main__':
 	try:
 		estimator = OdomGPSEstimator()
 		estimator.setInitNav()
 
-		#estimator.calibrateTheta()
+		estimator.calibrateTheta()
 
 		while not rospy.is_shutdown():
 			estimator.gpsCoordinateChange()
