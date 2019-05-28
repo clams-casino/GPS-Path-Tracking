@@ -9,9 +9,9 @@ import tf
 import numpy as np
 
 
-class OdomGPSEstimator:
+class GPS_estimator:
 
-	#will probably need tuning on real grizzly
+	#will probably need tuning 
 	R = 6.3781e6
 
 	def __init__(self):
@@ -19,26 +19,18 @@ class OdomGPSEstimator:
 		rospy.init_node('location_estimate', anonymous=True)
 		rospy.Subscriber('/navsat/fix', NavSatFix, self.navSatCallback)
 		rospy.Subscriber('/odometry/filtered', Odometry, self.odomCallback)
-		self.vel_pub = rospy.Publisher('/grizzly_velocity_controller/cmd_vel', Twist, queue_size=5)
 
-		self.odom_x = 0  #in odom frame which maybe misaligned with the NS-EW frame
-		self.odom_y = 0
-		self.gps_x = 0   #in GPS frame which is aligned with the NS-EW frame
+		self.gps_x = 0   
 		self.gps_y = 0
-		self.x = 0       #filtered estimate for x and y in NS-EW frame
+		self.odom_x = 0
+		self.odom_y = 0
+		self.x = 0      
 		self.y = 0
 
 		self.odom_yaw = 0
 		self.theta_odom_world = None
-
 		self.pos_cov = np.zeros((2,2))
-		self.corrected_pos_cov = np.zeros((2,2))
-		#not sure if need covariance for yaw since can't correct it anyways
-
-		# need to be able to find initial yaw relative to the NS EW frame through
-		# some calibration procedure
-
-		
+	
 		#GPS coordinates of starting location
 		self.init_long = None
 		self.init_lat = None
@@ -53,7 +45,6 @@ class OdomGPSEstimator:
 		self.curr_long = None
 		self.curr_lat = None
 
-
 		self.rate = rospy.Rate(50)
 
 
@@ -63,6 +54,16 @@ class OdomGPSEstimator:
 
 
 	
+	def odomCallback(self, odom_data):
+		self.odom_x = odom_data.pose.pose.position.x
+		self.odom_y = odom_data.pose.pose.position.y
+		self.pos_cov = np.array(odom_data.pose.covariance)
+
+		quat = odom_data.pose.pose.orientation
+		euler = tf.transformations.euler_from_quaternion([quat.x, quat.y, quat.z, quat.w])
+		self.odom_yaw = euler[2];
+
+
 
 	def setInitNav(self):
 		while True:
@@ -77,7 +78,6 @@ class OdomGPSEstimator:
 				print 'longitude: ', self.init_long
 				print 'latitude: ', self.init_lat
 				break
-
 
 
 
@@ -103,9 +103,8 @@ class OdomGPSEstimator:
 
 	
 
-
 	def gpsCoordinateChange(self):
-	    #updates gps measurements at main loop rate
+		'''updates gps measurements at main loop rate'''
 		if self.GPS_long != None:
 
 			self.curr_long = self.GPS_long
@@ -122,21 +121,11 @@ class OdomGPSEstimator:
 
 
 
-	def odomCallback(self, odom_data):
-		self.odom_x = odom_data.pose.pose.position.x
-		self.odom_y = odom_data.pose.pose.position.y
-		self.pos_cov = np.array(odom_data.pose.covariance)
-
-		quat = odom_data.pose.pose.orientation
-		euler = tf.transformations.euler_from_quaternion([quat.x, quat.y, quat.z, quat.w])
-		self.odom_yaw = euler[2];
-
-
-
-
 	def calibrateTheta(self):
-		#performs odom to NS-EW (world) frame calibration by driving the robot forward and back, 
-		#measuring angle from the GPS coordinate change
+		'''performs odom to NS-EW (world) frame calibration by driving the robot forward and back, 
+		   measuring angle from the GPS coordinate change'''
+
+		vel_pub = rospy.Publisher('/grizzly_velocity_controller/cmd_vel', Twist, queue_size=5)
 
 		data_period= 1 #[s]
 		calibration_speed = 0.5 #[m/s]
@@ -153,7 +142,7 @@ class OdomGPSEstimator:
 
 		while cal_curr_time <= cal_end_time:
 			cal_cmd_vel.linear.x = calibration_speed
-			self.vel_pub.publish(cal_cmd_vel)
+			vel_pub.publish(cal_cmd_vel)
 
 			if cal_curr_time - cal_prev_time >= data_period:
 
@@ -165,7 +154,7 @@ class OdomGPSEstimator:
 
 
 		cal_cmd_vel.linear.x = 0
-		self.vel_pub.publish(cal_cmd_vel)
+		vel_pub.publish(cal_cmd_vel)
 		print 'finished calibration data collection, determining odom to world frame orientation'
 
 		sum = 0
@@ -185,12 +174,12 @@ class OdomGPSEstimator:
 
 		while cal_curr_time <= cal_end_time:
 			cal_cmd_vel.linear.x = -calibration_speed
-			self.vel_pub.publish(cal_cmd_vel)
+			vel_pub.publish(cal_cmd_vel)
 			cal_curr_time = rospy.Time.now().to_sec()
 
 		cal_cmd_vel.linear.x = 0
-		self.vel_pub.publish(cal_cmd_vel)
-
+		vel_pub.publish(cal_cmd_vel)
+		del vel_pub
 		#result initialize attributes for GPS tracking
 		self.prev_long = self.GPS_long
 		self.prev_lat = self.GPS_lat
@@ -216,7 +205,7 @@ class OdomGPSEstimator:
 
 if __name__ == '__main__':
 	try:
-		estimator = OdomGPSEstimator()
+		estimator = GPS_estimator()
 		estimator.setInitNav()
 
 		estimator.calibrateTheta()
